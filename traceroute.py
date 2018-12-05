@@ -1,154 +1,124 @@
-import binascii
-import os
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+#
+#           Copyright 2018 Dept. CSE SUSTech
+#           Copyright 2018 Suraj Singh Bisht
+#
+#   Licensed under the Apache License, Version 2.0 (the "License");
+#   you may not use this file except in compliance with the License.
+#   You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+#   Unless required by applicable law or agreed to in writing, software
+#   distributed under the License is distributed on an "AS IS" BASIS,
+#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#   See the License for the specific language governing permissions and
+#   limitations under the License.
+#
+#
+# --------------------------------------------------------------------------
+#                         Don't Remove Authors Info                        |
+# --------------------------------------------------------------------------
+
+
+__author__ = 'Suraj Singh Bisht, HHQ. ZHANG'
+__credit__ = '["Suraj Singh Bisht",]'
+__contact__ = 'contact@jinlab.cn'
+__copyright__ = 'Copyright 2018 Dept. CSE SUSTech'
+__license__ = 'Apache 2.0'
+__Update__ = '2018-01-11 12:33:09.399381'
+__version__ = '0.1'
+__maintainer__ = 'HHQ. ZHANG'
+__status__ = 'Production'
+
 import random
+import select
+# import module
 import socket
-import struct
-import sys
 import time
+import binascii
 
-tab = '\t'
-DEFAULT_PAYLOAD = 32
-DEFAULT_BUFFER = 1024
-DEFAULT_PORT = 0
-DEFAULT_TIMEOUT = 3
+from raw_python import ICMPPacket,IPPacket, parse_icmp_header, parse_eth_header, parse_ip_header
 
-
-def binary_equivalent(hex):
-    return (bin(int(hex, 16))[2:]).zfill(16)
+def calc_rtt(time_sent):
+    return time.time() - time_sent
 
 
-def one_complement_sum(binary_1, binary_2):
-    sum = bin(int(binary_1, 2) + int(binary_2, 2))[2:].zfill(16)
-    if len(sum) == 16:
-        return sum
-    else:
-        return one_complement_sum(sum[1:], sum[0])
+def catch_ping_reply(s, ID, time_sent, timeout=1):
+    # create while loop
+    while True:
+        starting_time = time.time()  # Record Starting Time
+
+        # to handle timeout function of socket
+        process = select.select([s], [], [], timeout)
+
+        # check if timeout
+        if not process[0]:
+            return calc_rtt(time_sent), None, None
+
+        # receive packet
+        rec_packet, addr = s.recvfrom(1024)
+
+        # extract icmp packet from received packet
+        icmp = parse_icmp_header(rec_packet[20:28])
 
 
-def calculate_checksum(packet):
-    parts = []
-    hexdump = binascii.hexlify(packet)
-    hexdump = hexdump.decode("utf-8")
-    j = 0
+        return calc_rtt(time_sent), parse_ip_header(rec_packet[:20]), icmp
 
-    for i in range((len(hexdump) // 4)):
-        parts.append(binary_equivalent(hexdump[j:j + 4]))
-        j += 4
+def traceroute_request( addr=None):
 
-    # handling the remaining hex, if any, padding them with 0's
-    left_over = len(hexdump[j:])
-    for i in range(4 - left_over):
-        hexdump += "0"
+    sendSocket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+    address = socket.gethostbyname(addr)
+    print("Traceroute to "+addr+' '+'['+address+']'+ " 30 hops max")
 
-    parts.append(binary_equivalent(hexdump[j:]))
+    #30 hops at most
+    for ttl in range(1,31):
 
-    checksum = one_complement_sum(parts[0], parts[1])
-    for i in range(2, len(parts)):
-        checksum = one_complement_sum(checksum, parts[i])
-
-    inverted_checksum = ""
-    for char in checksum:
-        if char == "0":
-            inverted_checksum += "1"
-        else:
-            inverted_checksum += "0"
-
-    return int(inverted_checksum, 2)
-
-
-def get_ttl(packet):
-    packet = binascii.hexlify(packet).decode("utf-8")
-    return str(int(packet[16:18], 16))
-
-
-def add_payload(size):
-    return os.urandom(size)
-
-
-def icmp(seq_no, payload_size):
-    type = 8
-    code = 0
-    chksum = 0
-    id = random.randint(0, 0xFFFF)
-    data = add_payload(payload_size)
-    real_checksum = calculate_checksum(struct.pack("!BBHHH", type, code, chksum, id, seq_no) + data)
-    icmp_pkt = struct.pack("!BBHHH", type, code, real_checksum, id, seq_no)
-    return icmp_pkt + data
-
-
-def get_type(packet):
-    return int(str(packet[20]))
-
-
-def traceroute(hostname, no_packets, detailed):
-    try:
-        host_ip = socket.gethostbyname(hostname)
-    except socket.gaierror:
-        print("Invalid Address")
-        exit(1)
-    print()
-    print("Tracing route to " + hostname + " [" + socket.gethostbyname(hostname) + "]")
-    print("over a maximum of 30 hops:")
-    print()
-
-    soc = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
-    soc.settimeout(DEFAULT_TIMEOUT)
-    flag = 0
-    for ttl in range(1, 31):
-        count_responses = 0
-        print(ttl, end="\t")
-        address = []
-        for i in range(1, no_packets + 1):
+        sign = ''
+        #refresh the ttl
+        sendSocket.setsockopt(socket.SOL_IP, socket.IP_TTL, ttl)
+        #set timeout
+        sendSocket.settimeout(3)
+        print (ttl, end='\t')
+        for i in range(3):
             try:
-                start = time.time()
-                soc.setsockopt(socket.SOL_IP, socket.IP_TTL, ttl)
-                soc.sendto(icmp(i, DEFAULT_PAYLOAD), (socket.gethostbyname(hostname), DEFAULT_PORT))
-                packet, address = soc.recvfrom(DEFAULT_BUFFER)
-                end = time.time()
-                round_trip_time = (end - start) * 1000
-                print(str(int(round_trip_time)) + " ms", end='\t')
-                count_responses += 1
-                if get_type(packet) == 0:
-                    flag = 1
-                    # uncomment next line if you want to wait between sending packets.
-                    # time.sleep(1)
+                # Random Packet Id
+                pkt_id = random.randrange(10000, 65000)
+                packet = ICMPPacket(_id=pkt_id).raw
+                sendSocket.sendto(packet, (socket.gethostbyname(address), 0))
+                rtt, reply, icmp_reply = catch_ping_reply(sendSocket, pkt_id, time.time())
+
+                if reply:
+                    sign = reply
+                    reply['length'] = reply['Total Length'] - 20  # sub header
+                    print('{0:.2f} ms'.format(rtt*1000), end='\t')
+                else:
+                    print("*", end="\t")
+
             except socket.timeout:
-                print("*\t", end="\t")
+                print("*", end="\t")
+        if sign:
+            # break the procedure when it has reached the destination
+            if (sign["Source Address"] == address):
+                print(addr+'\t'+'['+address+']')
+                break
+            print('{0[Source Address]}'.format(sign), end='\t')
+        print()
 
-        if count_responses != 0:
-            try:
-                print(socket.gethostbyaddr(address[0])[0] + " [" + address[0] + "]")
-            except socket.herror:
-                print(address[0])
-        else:
-            print("Request timed out.")
-
-        if flag == 1:
-            break
-
-    if flag == 1:
-        print("Trace complete")
-    else:
-        print("Unable to reach " + hostname + " in 30 hops")
-
+    # close socket
+    sendSocket.close()
+    return pkt_id
 
 def main():
-    """
-    The main program which determines type of request.
-    :return: None
-    """
-    if len(sys.argv) < 3:  # checking for commandline arguments
-        print("Please enter a host name.")
-        exit(1)
 
-    hostname = sys.argv[2]
+    # take Input
+    addr = input("[+] Enter Domain Name : ") or "www.sustc.edu.cn"
 
-    if sys.argv[1] == "traceroute":
-        traceroute(hostname, 3, True)
-    else:
-        print("I can only traceroute now!")
-        exit(1)
+    ID = traceroute_request(addr)
 
+    return
 
 if __name__ == '__main__':
     main()
