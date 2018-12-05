@@ -38,9 +38,9 @@ import select
 # import module
 import socket
 import time
-import binascii
 
-from raw_python import ICMPPacket,IPPacket, parse_icmp_header, parse_eth_header, parse_ip_header
+from raw_python import ICMPPacket, parse_icmp_header, parse_eth_header, parse_ip_header
+
 
 def calc_rtt(time_sent):
     return time.time() - time_sent
@@ -64,61 +64,60 @@ def catch_ping_reply(s, ID, time_sent, timeout=1):
         # extract icmp packet from received packet
         icmp = parse_icmp_header(rec_packet[20:28])
 
-
+        # check identification
         return calc_rtt(time_sent), parse_ip_header(rec_packet[:20]), icmp
 
-def traceroute_request( addr=None):
 
-    sendSocket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
-    address = socket.gethostbyname(addr)
-    print("Traceroute to "+addr+' '+'['+address+']'+ " 30 hops max")
 
-    #30 hops at most
-    for ttl in range(1,31):
 
-        sign = ''
-        #refresh the ttl
-        sendSocket.setsockopt(socket.SOL_IP, socket.IP_TTL, ttl)
-        #set timeout
-        sendSocket.settimeout(3)
-        print (ttl, end='\t')
+def single_ping_request(s, addr=None):
+    domain_ip = socket.gethostbyname(addr)
+
+    print('Traceroute source' + addr + '['+domain_ip+']')
+
+
+    for ttl in range(1, 31):
+
+        s.setsockopt(socket.SOL_IP, socket.IP_TTL, ttl)
+        s.settimeout(3)
+        mark = ''
         for i in range(3):
-            try:
-                # Random Packet Id
-                pkt_id = random.randrange(10000, 65000)
-                packet = ICMPPacket(_id=pkt_id).raw
-                sendSocket.sendto(packet, (socket.gethostbyname(address), 0))
-                rtt, reply, icmp_reply = catch_ping_reply(sendSocket, pkt_id, time.time())
+            pkt_id = random.randrange(10000, 65000)
+            packet = ICMPPacket(_id=pkt_id).raw
+            s.sendto(packet, (domain_ip, 0))
+            rtt, reply, icmp_reply = catch_ping_reply(s, pkt_id, time.time())
 
-                if reply:
-                    sign = reply
-                    reply['length'] = reply['Total Length'] - 20  # sub header
-                    print('{0:.2f} ms'.format(rtt*1000), end='\t')
-                else:
-                    print("*", end="\t")
-
-            except socket.timeout:
-                print("*", end="\t")
-        if sign:
-            # break the procedure when it has reached the destination
-            if (sign["Source Address"] == address):
-                print(addr+'\t'+'['+address+']')
-                break
-            print('{0[Source Address]}'.format(sign), end='\t')
+            if reply:
+                mark = reply
+                reply['length'] = reply['Total Length'] - 20  # sub header
+                print('{0[length]} bytes reply from {0[Source Address]} ({0[Source Address]}): '
+                      'icmp_seq={1[seq]} ttl={0[TTL]} time={2:.2f} ms'
+                      .format(reply, icmp_reply, rtt * 1000))
+            else:
+                print ('*')
+        if (mark != '') and ( mark["Source Address"] == domain_ip):
+            print("traceroute "+addr+" completed.")
+            break
         print()
 
-    # close socket
-    sendSocket.close()
     return pkt_id
 
+
 def main():
+    # create socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
 
     # take Input
     addr = input("[+] Enter Domain Name : ") or "www.sustc.edu.cn"
+    print('PING {0} ({1}) 56(84) bytes of data.'.format(addr, socket.gethostbyname(addr)))
+    # Request sent
+    ID = single_ping_request(s, addr)
 
-    ID = traceroute_request(addr)
 
+    # close socket
+    s.close()
     return
+
 
 if __name__ == '__main__':
     main()
